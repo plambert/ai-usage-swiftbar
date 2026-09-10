@@ -40,7 +40,11 @@ KEYS_REFRESH_SECONDS = 300
 HISTORY_KEEP_SECONDS = 8 * 86400
 BURN_WINDOWS = ((3600, "1h"), (86400, "24h"), (7 * 86400, "7d"))
 
-OP_TIMEOUT = 20
+# How long to wait for `op read`. Under launchd nobody is watching a terminal,
+# so the 1Password approval prompt needs time to be noticed and answered; a
+# short timeout would abandon a prompt the user is about to approve and then
+# raise a fresh one on the retry.
+OP_TIMEOUT = 120
 OP_CANDIDATES = ("/opt/homebrew/bin/op", "/usr/local/bin/op")
 CLAUDE_TIMEOUT = 60
 CLAUDE_CANDIDATES = (
