@@ -1,0 +1,4 @@
+__pycache__/
+*.vars.json
+.DS_Store
+config.json

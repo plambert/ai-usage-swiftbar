@@ -1,0 +1,13 @@
+{
+  "op_path": "",
+  "openrouter": {
+    "enabled": true,
+    "key_ref": "op://Private/OpenRouter/credential",
+    "interval": 60
+  },
+  "claude": {
+    "enabled": true,
+    "interval": 60,
+    "claude_path": ""
+  }
+}
