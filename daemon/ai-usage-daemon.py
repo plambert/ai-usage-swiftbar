@@ -295,7 +295,8 @@ def burn_rates(history, now):
 class OpenRouterSource:
     name = "openrouter"
 
-    def __init__(self, cfg, data_dir):
+    def __init__(self, cfg, data_dir, config_path=None):
+        self.config_path = config_path
         section = cfg.get("openrouter", {})
         self.interval = max(15, int(section.get("interval", 60)))
         self.key_ref = (section.get("key_ref") or "").strip()
@@ -307,7 +308,20 @@ class OpenRouterSource:
         self.history = [h for h in read_json(self.history_file).get("history", [])
                         if isinstance(h, list) and len(h) == 3]
 
+    def refresh_settings(self):
+        """Pick up an edited key_ref without a daemon restart."""
+        if not self.config_path or not os.path.exists(self.config_path):
+            return
+        cfg = load_config(self.config_path)
+        ref = (cfg.get("openrouter", {}).get("key_ref") or "").strip()
+        self.op_path = (cfg.get("op_path") or "").strip()
+        if ref != self.key_ref:
+            log("openrouter: key_ref changed in config")
+            self.key_ref = ref
+            self.key = None
+
     def ensure_key(self):
+        self.refresh_settings()
         if self.key:
             return
         if self.key_override:
@@ -514,10 +528,10 @@ class Worker(threading.Thread):
                 self.stop.wait(1)
 
 
-def build_sources(cfg, data_dir, only=None):
+def build_sources(cfg, data_dir, only=None, config_path=None):
     sources = []
     if cfg["openrouter"].get("enabled", True) and only in (None, "openrouter"):
-        sources.append(OpenRouterSource(cfg, data_dir))
+        sources.append(OpenRouterSource(cfg, data_dir, config_path))
     if cfg["claude"].get("enabled", True) and only in (None, "claude"):
         sources.append(ClaudeSource(cfg, data_dir))
     return sources
@@ -537,7 +551,7 @@ def main(argv=None):
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
 
-    workers = [Worker(s, args.data_dir, stop, once=args.once) for s in build_sources(cfg, args.data_dir, args.source)]
+    workers = [Worker(s, args.data_dir, stop, once=args.once) for s in build_sources(cfg, args.data_dir, args.source, args.config)]
     if not workers:
         log("no sources enabled")
         return 1

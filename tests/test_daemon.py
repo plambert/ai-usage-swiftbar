@@ -124,6 +124,24 @@ class OpenRouterSourceTests(unittest.TestCase):
                 src.poll(1_700_000_060)
         self.assertEqual(resolve.call_count, 2)
 
+    def test_key_ref_change_is_picked_up_without_restart(self):
+        path = os.path.join(self.data_dir, "config.json")
+        with open(path, "w") as fh:
+            json.dump({"openrouter": {"key_ref": "op://V/I/old"}}, fh)
+        src = daemon.OpenRouterSource(daemon.load_config(path), self.data_dir, config_path=path)
+        with mock.patch.object(daemon, "resolve_secret", side_effect=daemon.SourceError("no such field")) as resolve:
+            with self.assertRaises(daemon.SourceError):
+                src.poll(1_700_000_000)
+        self.assertEqual(resolve.call_args[0][0], "op://V/I/old")
+        with open(path, "w") as fh:
+            json.dump({"openrouter": {"key_ref": "op://V/I/new"}}, fh)
+        with mock.patch.object(daemon, "resolve_secret", return_value="k") as resolve, \
+                mock.patch.object(daemon, "fetch_credits", return_value=(1.0, 0.0)), \
+                mock.patch.object(daemon, "fetch_keys", return_value=[]), \
+                mock.patch.object(daemon, "log"):
+            src.poll(1_700_000_060)
+        self.assertEqual(resolve.call_args[0][0], "op://V/I/new")
+
     def test_history_survives_restart(self):
         src = daemon.OpenRouterSource(self.cfg, self.data_dir)
         with mock.patch.object(daemon, "resolve_secret", return_value="k"), \
