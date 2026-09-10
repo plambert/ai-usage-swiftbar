@@ -41,6 +41,8 @@ install-daemon:
 	    launchd/$(LABEL).plist.in > "$(PLIST)"
 	plutil -lint "$(PLIST)"
 	-launchctl bootout gui/$(UID)/$(LABEL) 2>/dev/null
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+	    launchctl print gui/$(UID)/$(LABEL) >/dev/null 2>&1 || break; sleep 1; done
 	launchctl bootstrap gui/$(UID) "$(PLIST)"
 	@echo "Daemon loaded as $(LABEL); log: $(LOG)"
 

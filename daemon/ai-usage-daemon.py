@@ -431,6 +431,11 @@ class ClaudeSource:
         self.interval = max(15, int(section.get("interval", 60)))
         self.claude_path = (section.get("claude_path") or "").strip()
         self.fixture = os.environ.get("CLAUDE_USAGE_FIXTURE", "").strip()
+        # claude treats its cwd as the project and scans it at startup. Under
+        # launchd the cwd would be "/", and the scan walks into ~/Desktop and
+        # friends, triggering macOS folder-access prompts. Give it an empty
+        # directory instead.
+        self.work_dir = os.path.join(data_dir, "claude-cwd")
 
     def run_claude(self):
         if self.fixture:
@@ -441,11 +446,12 @@ class ClaudeSource:
             raise SourceError("claude not found; set claude.claude_path in the daemon config")
         env = dict(os.environ)
         env.pop("CLAUDECODE", None)
+        os.makedirs(self.work_dir, exist_ok=True)
         try:
             proc = subprocess.run(
                 [claude, "-p", "/usage", "--output-format", "json"],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                timeout=CLAUDE_TIMEOUT, env=env,
+                timeout=CLAUDE_TIMEOUT, env=env, cwd=self.work_dir,
             )
         except subprocess.TimeoutExpired:
             raise SourceError("claude did not answer within %ds" % CLAUDE_TIMEOUT) from None

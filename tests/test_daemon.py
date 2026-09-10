@@ -180,6 +180,8 @@ class ClaudeSourceTests(unittest.TestCase):
             self.assertEqual(src.poll(0)["session"]["percent"], 1)
         self.assertEqual(run.call_args[0][0], ["/fake/claude", "-p", "/usage", "--output-format", "json"])
         self.assertNotIn("CLAUDECODE", run.call_args[1]["env"])
+        self.assertEqual(run.call_args[1]["cwd"], src.work_dir)
+        self.assertTrue(os.path.isdir(src.work_dir))
 
 
 class FakeSource:
