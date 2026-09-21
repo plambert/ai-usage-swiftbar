@@ -140,6 +140,18 @@ class OpenRouterRenderTests(unittest.TestCase):
         self.assertTrue(text.endswith("\n~~~\n"))
         self.assertEqual(text.count("~~~"), 1)
 
+    def test_render_failure_emits_a_block_instead_of_exiting(self):
+        write_snapshot(self.dir, "openrouter", OR_DATA)
+        buf, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"AI_USAGE_DATA_DIR": self.dir, "SWIFTBAR_PLUGIN_DATA_PATH": os.path.join(self.dir, "p")}), \
+                mock.patch.object(orp.sys, "stdout", buf), mock.patch.object(orp.sys, "stderr", err), \
+                mock.patch.object(orp, "render_once", side_effect=RuntimeError("boom")):
+            orp.main(["--once"])
+        text = buf.getvalue()
+        self.assertIn("Plugin error: RuntimeError: boom", text)
+        self.assertTrue(text.endswith("\n~~~\n"))
+        self.assertIn("RuntimeError: boom", err.getvalue())
+
 
 class ClaudeRenderTests(unittest.TestCase):
     def setUp(self):
@@ -187,6 +199,18 @@ class ClaudeRenderTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"AI_USAGE_DATA_DIR": self.dir}), mock.patch.object(clp.sys, "stdout", buf):
             self.assertEqual(clp.main(["--once"]), 0)
         self.assertTrue(buf.getvalue().endswith("\n~~~\n"))
+
+    def test_render_failure_emits_a_block_instead_of_exiting(self):
+        write_snapshot(self.dir, "claude", CL_DATA)
+        buf, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"AI_USAGE_DATA_DIR": self.dir}), \
+                mock.patch.object(clp.sys, "stdout", buf), mock.patch.object(clp.sys, "stderr", err), \
+                mock.patch.object(clp, "render_once", side_effect=RuntimeError("boom")):
+            clp.main(["--once"])
+        text = buf.getvalue()
+        self.assertIn("Plugin error: RuntimeError: boom", text)
+        self.assertTrue(text.endswith("\n~~~\n"))
+        self.assertIn("RuntimeError: boom", err.getvalue())
 
 
 if __name__ == "__main__":

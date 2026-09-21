@@ -25,6 +25,7 @@ import json
 import os
 import sys
 import time
+import traceback
 
 DEFAULT_DATA_DIR = os.path.expanduser("~/Library/Application Support/ai-usage-swiftbar")
 LAUNCHD_LABEL = "net.plambert.ai-usage-swiftbar"
@@ -251,6 +252,16 @@ def emit(rows):
     sys.stdout.flush()
 
 
+def error_rows(exc):
+    """Menu shown when rendering raised something we did not anticipate."""
+    return [
+        line("Claude \u26a0\ufe0e", templateImage=ICON_B64, color="gray"),
+        "---",
+        line("Plugin error: %s: %s" % (type(exc).__name__, exc), color="red"),
+        line("Usage settings", href=URL_USAGE),
+    ]
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     cfg = Config()
@@ -260,8 +271,17 @@ def main(argv=None):
         _, mtime = read_snapshot(cfg.snapshot_file)
         now = time.time()
         if mtime != last_mtime or now - last_render >= RERENDER_SECONDS:
+            # SwiftBar never restarts a streamable plugin that exits, so an
+            # unhandled exception here would leave a stale menu on screen
+            # until the user notices. Report the failure in the menu, log a
+            # traceback for diagnosis, and try again on the next tick.
             try:
-                emit(render_once(cfg, now))
+                rows = render_once(cfg, now)
+            except Exception as exc:
+                traceback.print_exc()
+                rows = error_rows(exc)
+            try:
+                emit(rows)
             except BrokenPipeError:
                 return 0
             last_mtime, last_render = mtime, now

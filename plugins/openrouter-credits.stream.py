@@ -29,6 +29,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 import urllib.parse
 
 DEFAULT_DATA_DIR = os.path.expanduser("~/Library/Application Support/ai-usage-swiftbar")
@@ -351,6 +352,16 @@ def emit(rows):
     sys.stdout.flush()
 
 
+def error_rows(exc):
+    """Menu shown when rendering raised something we did not anticipate."""
+    return [
+        line("OpenRouter \u26a0\ufe0e", templateImage=ICON_B64, color="gray"),
+        "---",
+        line("Plugin error: %s: %s" % (type(exc).__name__, exc), color="red"),
+        line("Credits", href=URL_CREDITS),
+    ]
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     cfg = Config()
@@ -361,11 +372,23 @@ def main(argv=None):
         _, mtime = read_snapshot(cfg.snapshot_file)
         now = time.time()
         if mtime != last_mtime or now - last_render >= RERENDER_SECONDS:
+            # SwiftBar never restarts a streamable plugin that exits, so an
+            # unhandled exception here would leave a stale menu on screen
+            # until the user notices. Report the failure in the menu, log a
+            # traceback for diagnosis, and try again on the next tick.
             try:
-                emit(render_once(cfg, state, now))
+                rows = render_once(cfg, state, now)
+            except Exception as exc:
+                traceback.print_exc()
+                rows = error_rows(exc)
+            try:
+                emit(rows)
             except BrokenPipeError:
                 return 0
-            save_state(cfg.state_file, state)
+            try:
+                save_state(cfg.state_file, state)
+            except Exception:
+                traceback.print_exc()
             last_mtime, last_render = mtime, now
             if once:
                 return 0
