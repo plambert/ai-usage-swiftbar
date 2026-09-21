@@ -28,8 +28,12 @@
     <true/>
     <key>ThrottleInterval</key>
     <integer>10</integer>
+    <!-- Standard, not Background: a Background job and everything it spawns is
+         confined to the efficiency cores with throttled CPU and I/O. The claude
+         CLI needs a few seconds of real CPU to start, and under that policy it
+         overran the 60s poll timeout on every run. -->
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Standard</string>
     <key>StandardOutPath</key>
     <string>@LOG@</string>
     <key>StandardErrorPath</key>
