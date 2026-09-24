@@ -23,6 +23,7 @@ Run with --once to print a single menu block and exit.
 
 import json
 import os
+import subprocess
 import sys
 import time
 import traceback
@@ -32,6 +33,10 @@ LAUNCHD_LABEL = "net.plambert.ai-usage-swiftbar"
 SOURCE = "claude"
 
 URL_USAGE = "https://claude.ai/new#settings/usage"
+
+SAY_PATH = "/usr/bin/say"
+ANNOUNCE_LABEL = "Announce when session limit resets"
+ANNOUNCE_TEXT = "The claude session limit has reset."
 
 POLL_SECONDS = 2
 RERENDER_SECONDS = 60
@@ -78,6 +83,12 @@ class Config:
         self.data_dir = e.get("AI_USAGE_DATA_DIR", "").strip() or DEFAULT_DATA_DIR
         self.snapshot_file = os.path.join(self.data_dir, "%s.json" % SOURCE)
         self.trigger_file = os.path.join(self.data_dir, "refresh-%s" % SOURCE)
+        plugin_data = e.get("SWIFTBAR_PLUGIN_DATA_PATH") or os.path.join(self.data_dir, "plugin-%s" % SOURCE)
+        self.state_file = os.path.join(plugin_data, "state.json")
+        # Presence of this file is the armed state of the announce toggle; the
+        # menu item itself creates and removes it, so the choice survives a
+        # plugin restart without the stream having to own it.
+        self.announce_file = os.path.join(plugin_data, "announce-session-reset")
 
 
 def read_snapshot(path):
@@ -89,6 +100,26 @@ def read_snapshot(path):
         return (snap if isinstance(snap, dict) else None), mtime
     except (OSError, ValueError):
         return None, None
+
+
+def load_state(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            state = json.load(fh)
+        return state if isinstance(state, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(path, state):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, separators=(",", ":"))
+        os.replace(tmp, path)
+    except OSError as exc:
+        print("state save failed: %s" % exc, file=sys.stderr)
 
 
 # --------------------------------------------------------------------------
@@ -141,6 +172,51 @@ def daemon_lines(cfg):
              param3="gui/%d/%s" % (uid, LAUNCHD_LABEL), terminal="false"),
         line("Refresh now", bash="/usr/bin/touch", param1=cfg.trigger_file, terminal="false"),
     ]
+
+
+def announce_armed(cfg):
+    return os.path.exists(cfg.announce_file)
+
+
+def announce_line(cfg):
+    """The announce-on-reset toggle: clicking it flips the checkmark.
+
+    SwiftBar runs the command and the stream notices the file within a poll,
+    so the menu redraws itself without a plugin restart.
+    """
+    if announce_armed(cfg):
+        return line(ANNOUNCE_LABEL, checked="true", bash="/bin/rm", param1="-f",
+                    param2=cfg.announce_file, terminal="false")
+    return line(ANNOUNCE_LABEL, bash="/usr/bin/touch", param1=cfg.announce_file,
+                terminal="false")
+
+
+def maybe_announce(cfg, state, usage):
+    """Speak a line when the session percentage drops, if the user armed it.
+
+    A drop means the session window rolled over. The arm is one-shot: firing
+    clears it. `say` is spawned detached so a long sentence neither blocks the
+    render loop nor dies when SwiftBar restarts the plugin.
+    """
+    session = (usage or {}).get("session")
+    percent = session.get("percent") if isinstance(session, dict) else None
+    if percent is None:
+        return
+    previous = state.get("session_percent")
+    state["session_percent"] = percent
+    if previous is None or percent >= previous or not announce_armed(cfg):
+        return
+    try:
+        subprocess.Popen([SAY_PATH, ANNOUNCE_TEXT], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError as exc:
+        print("say failed: %s" % exc, file=sys.stderr)
+        return
+    try:
+        os.remove(cfg.announce_file)
+    except OSError:
+        pass
 
 
 def capitalize(label):
@@ -205,6 +281,7 @@ def render(cfg, now, snap):
         out.extend(action_lines(actions))
         out.append("---")
         out.append(line("Usage settings", href=URL_USAGE))
+        out.append(announce_line(cfg))
         out.extend(daemon_lines(cfg))
         return out
 
@@ -232,6 +309,7 @@ def render(cfg, now, snap):
 
     out.append(line("Usage settings", href=URL_USAGE))
     out.append(line("Updated %s (%s)" % (clock(fetched_at), relative(now - fetched_at))))
+    out.append(announce_line(cfg))
     out.extend(daemon_lines(cfg))
     return out
 
@@ -265,18 +343,27 @@ def error_rows(exc):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     cfg = Config()
+    try:
+        os.makedirs(os.path.dirname(cfg.announce_file), exist_ok=True)
+    except OSError as exc:
+        print("plugin data dir unavailable: %s" % exc, file=sys.stderr)
+    state = load_state(cfg.state_file)
     once = "--once" in argv
-    last_mtime, last_render = object(), 0.0
+    last_key, last_render = object(), 0.0
     while True:
-        _, mtime = read_snapshot(cfg.snapshot_file)
+        snap, mtime = read_snapshot(cfg.snapshot_file)
         now = time.time()
-        if mtime != last_mtime or now - last_render >= RERENDER_SECONDS:
+        # The toggle is part of what the menu shows, so a click has to redraw
+        # it as promptly as a new snapshot does.
+        key = (mtime, announce_armed(cfg))
+        if key != last_key or now - last_render >= RERENDER_SECONDS:
             # SwiftBar never restarts a streamable plugin that exits, so an
             # unhandled exception here would leave a stale menu on screen
             # until the user notices. Report the failure in the menu, log a
             # traceback for diagnosis, and try again on the next tick.
             try:
-                rows = render_once(cfg, now)
+                maybe_announce(cfg, state, (snap or {}).get("data"))
+                rows = render(cfg, now, snap)
             except Exception as exc:
                 traceback.print_exc()
                 rows = error_rows(exc)
@@ -284,7 +371,11 @@ def main(argv=None):
                 emit(rows)
             except BrokenPipeError:
                 return 0
-            last_mtime, last_render = mtime, now
+            try:
+                save_state(cfg.state_file, state)
+            except Exception:
+                traceback.print_exc()
+            last_key, last_render = (mtime, announce_armed(cfg)), now
             if once:
                 return 0
         time.sleep(POLL_SECONDS)

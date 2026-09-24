@@ -85,6 +85,12 @@ plugins read them at start, so SwiftBar restarts the plugin when they change.
 | Claude | `CLAUDE_USAGE_WARN_PERCENT` | `80` | Weekly percentage that adds the warning triangle |
 | both | `AI_USAGE_DATA_DIR` | empty | Daemon data directory, if not the default |
 
+The Claude menu also carries an "Announce when session limit resets" item, unticked by
+default. Ticking it arms a one-shot spoken announcement: the next time the session
+percentage drops, which means the window has rolled over, the plugin runs `say` in the
+background and clears the tick. Ticking it again disarms it. The arm is a file in the
+plugin's data directory, so it survives a plugin restart.
+
 ## Development
 
 ```bash

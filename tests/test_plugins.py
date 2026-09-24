@@ -205,12 +205,96 @@ class ClaudeRenderTests(unittest.TestCase):
         buf, err = io.StringIO(), io.StringIO()
         with mock.patch.dict(os.environ, {"AI_USAGE_DATA_DIR": self.dir}), \
                 mock.patch.object(clp.sys, "stdout", buf), mock.patch.object(clp.sys, "stderr", err), \
-                mock.patch.object(clp, "render_once", side_effect=RuntimeError("boom")):
+                mock.patch.object(clp, "render", side_effect=RuntimeError("boom")):
             clp.main(["--once"])
         text = buf.getvalue()
         self.assertIn("Plugin error: RuntimeError: boom", text)
         self.assertTrue(text.endswith("\n~~~\n"))
         self.assertIn("RuntimeError: boom", err.getvalue())
+
+
+class ClaudeAnnounceTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.cfg = cl_config(self.dir)
+        os.makedirs(os.path.dirname(self.cfg.announce_file), exist_ok=True)
+
+    def arm(self):
+        open(self.cfg.announce_file, "w").close()
+
+    def run_once(self):
+        """Run the stream loop for one pass; returns the emitted menu."""
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ, {"AI_USAGE_DATA_DIR": self.dir}), \
+                mock.patch.object(clp.sys, "stdout", buf):
+            clp.main(["--once"])
+        return buf.getvalue()
+
+    def test_toggle_defaults_to_unchecked_and_arms_on_click(self):
+        write_snapshot(self.dir, "claude", CL_DATA)
+        out = clp.render_once(self.cfg, NOW)
+        row = next(r for r in out if r.startswith(clp.ANNOUNCE_LABEL))
+        self.assertNotIn("checked=", row)
+        self.assertIn("bash=/usr/bin/touch", row)
+        self.assertIn(self.cfg.announce_file, row)
+
+        self.arm()
+        out = clp.render_once(self.cfg, NOW)
+        row = next(r for r in out if r.startswith(clp.ANNOUNCE_LABEL))
+        self.assertIn("checked=true", row)
+        self.assertIn("bash=/bin/rm", row)
+
+    def test_toggle_is_offered_when_there_is_no_snapshot(self):
+        out = clp.render_once(self.cfg, NOW)
+        self.assertTrue(any(r.startswith(clp.ANNOUNCE_LABEL) for r in out))
+
+    def test_drop_while_armed_says_and_disarms(self):
+        data = json.loads(json.dumps(CL_DATA))
+        write_snapshot(self.dir, "claude", data)
+        with mock.patch.object(clp.subprocess, "Popen") as popen:
+            self.run_once()                      # records 81%, nothing to compare
+            self.arm()
+            data["session"]["percent"] = 2
+            write_snapshot(self.dir, "claude", data)
+            out = self.run_once()
+        popen.assert_called_once()
+        self.assertEqual(popen.call_args[0][0], [clp.SAY_PATH, clp.ANNOUNCE_TEXT])
+        self.assertTrue(popen.call_args[1]["start_new_session"])
+        self.assertFalse(os.path.exists(self.cfg.announce_file))
+        self.assertNotIn("checked=true", out)
+
+    def test_drop_while_disarmed_stays_quiet(self):
+        data = json.loads(json.dumps(CL_DATA))
+        write_snapshot(self.dir, "claude", data)
+        with mock.patch.object(clp.subprocess, "Popen") as popen:
+            self.run_once()
+            data["session"]["percent"] = 2
+            write_snapshot(self.dir, "claude", data)
+            self.run_once()
+        popen.assert_not_called()
+
+    def test_rise_while_armed_stays_quiet_and_armed(self):
+        data = json.loads(json.dumps(CL_DATA))
+        data["session"]["percent"] = 10
+        write_snapshot(self.dir, "claude", data)
+        with mock.patch.object(clp.subprocess, "Popen") as popen:
+            self.run_once()
+            self.arm()
+            data["session"]["percent"] = 11
+            write_snapshot(self.dir, "claude", data)
+            self.run_once()
+        popen.assert_not_called()
+        self.assertTrue(os.path.exists(self.cfg.announce_file))
+
+    def test_first_reading_never_announces(self):
+        data = json.loads(json.dumps(CL_DATA))
+        data["session"]["percent"] = 2
+        write_snapshot(self.dir, "claude", data)
+        self.arm()
+        with mock.patch.object(clp.subprocess, "Popen") as popen:
+            self.run_once()
+        popen.assert_not_called()
+        self.assertTrue(os.path.exists(self.cfg.announce_file))
 
 
 if __name__ == "__main__":
