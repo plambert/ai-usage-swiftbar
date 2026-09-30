@@ -184,6 +184,48 @@ class ClaudeSourceTests(unittest.TestCase):
         self.assertTrue(os.path.isdir(src.work_dir))
 
 
+class ClaudeHistoryTests(unittest.TestCase):
+    def setUp(self):
+        self.data_dir = tempfile.mkdtemp()
+        self.cfg = daemon.load_config("/nonexistent")
+
+    def source(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_USAGE_FIXTURE": os.path.join(FIXTURES, "claude-usage.json")}):
+            return daemon.ClaudeSource(self.cfg, self.data_dir)
+
+    def test_every_poll_is_recorded_and_survives_restart(self):
+        src = self.source()
+        src.poll(1_700_000_000)
+        src.poll(1_700_000_060)
+        again = self.source()
+        self.assertEqual(len(again.history), 2)
+        ts, session, weekly = again.history[0]
+        self.assertEqual(ts, 1_700_000_000)
+        self.assertEqual(session, 82)
+        self.assertEqual(weekly, [["all models", 9], ["Fable", 7]])
+        self.assertTrue(os.path.exists(os.path.join(self.data_dir, "claude-history.json")))
+
+    def test_old_samples_are_dropped(self):
+        src = self.source()
+        src.history = [[1_700_000_000 - daemon.HISTORY_KEEP_SECONDS - 1, 5, []]]
+        src.poll(1_700_000_000)
+        self.assertEqual([h[0] for h in src.history], [1_700_000_000])
+
+    def test_last_session_reset_finds_the_newest_drop(self):
+        history = [[10, 5, []], [20, 40, []], [30, 2, []], [40, 9, []], [50, 20, []]]
+        self.assertEqual(daemon.last_session_reset(history), {"percent": 40, "reset_ts": 30})
+
+    def test_last_session_reset_is_none_without_a_drop(self):
+        self.assertIsNone(daemon.last_session_reset([]))
+        self.assertIsNone(daemon.last_session_reset([[10, 5, []], [20, 9, []]]))
+
+    def test_poll_reports_the_last_reset(self):
+        src = self.source()
+        src.history = [[1_699_999_000, 77, []], [1_699_999_060, 3, []]]
+        data = src.poll(1_700_000_000)
+        self.assertEqual(data["last_session"], {"percent": 77, "reset_ts": 1_699_999_060})
+
+
 class FakeSource:
     name = "fake"
     interval = 60

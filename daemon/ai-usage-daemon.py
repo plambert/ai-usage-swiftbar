@@ -423,6 +423,19 @@ def parse_usage(text):
     return {"session": session, "weekly": weekly, "extra": extra}
 
 
+def last_session_reset(history):
+    """Most recent drop in the session percentage, or None.
+
+    A drop means the session window rolled over. It is spotted on the first
+    poll after the rollover, so reset_ts runs late by up to one interval.
+    """
+    for i in range(len(history) - 1, 0, -1):
+        before, after = history[i - 1][1], history[i][1]
+        if isinstance(before, int) and isinstance(after, int) and after < before:
+            return {"percent": before, "reset_ts": history[i][0]}
+    return None
+
+
 class ClaudeSource:
     name = "claude"
 
@@ -431,6 +444,9 @@ class ClaudeSource:
         self.interval = max(15, int(section.get("interval", 60)))
         self.claude_path = (section.get("claude_path") or "").strip()
         self.fixture = os.environ.get("CLAUDE_USAGE_FIXTURE", "").strip()
+        self.history_file = os.path.join(data_dir, "claude-history.json")
+        self.history = [h for h in read_json(self.history_file).get("history", [])
+                        if isinstance(h, list) and len(h) == 3]
         # claude treats its cwd as the project and scans it at startup. Under
         # launchd the cwd would be "/", and the scan walks into ~/Desktop and
         # friends, triggering macOS folder-access prompts. Give it an empty
@@ -464,8 +480,18 @@ class ClaudeSource:
             raise SourceError("claude exited %d: %s" % (proc.returncode, detail[:120]))
         return extract_result(out)
 
+    def record(self, now, usage):
+        session = usage.get("session") or {}
+        weekly = [[w["label"], w["percent"]] for w in usage.get("weekly") or []]
+        self.history.append([int(now), session.get("percent"), weekly])
+        self.history = [h for h in self.history if h[0] >= now - HISTORY_KEEP_SECONDS]
+        write_json(self.history_file, {"history": self.history})
+
     def poll(self, now):
-        return parse_usage(self.run_claude())
+        usage = parse_usage(self.run_claude())
+        self.record(now, usage)
+        usage["last_session"] = last_session_reset(self.history)
+        return usage
 
 
 # --------------------------------------------------------------------------

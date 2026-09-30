@@ -24,6 +24,11 @@ launchd ──▶ ai-usage-daemon.py ──▶ ~/Library/Application Support/ai-
 * The daemon polls each source on its own interval (60 seconds by default), and writes one JSON
   snapshot per source: timestamp, ok flag, error text and suggested fixes, the last good data,
   and when it was fetched. A failed poll keeps the last good data in the snapshot.
+* Every measurement also lands in a history file, `openrouter-history.json` and
+  `claude-history.json`, trimmed to eight days. OpenRouter history feeds the burn rates. Claude
+  history records the session and weekly percentages, and a drop in the session percentage marks
+  the point where the window rolled over. The daemon reports that as `last_session` in the
+  snapshot, which is what the session tooltip and the announce toggle both read.
 * Each plugin is a SwiftBar streamable plugin. It watches its snapshot's mtime, re-renders the
   menu when the file changes, and re-renders once a minute regardless so "5 minutes ago" text
   stays current. It never contacts OpenRouter, Claude, or 1Password.
@@ -84,6 +89,10 @@ plugins read them at start, so SwiftBar restarts the plugin when they change.
 | OpenRouter | `OPENROUTER_TITLE_STYLE` | `remaining` | `remaining`, `remaining+today`, or `icon-only` |
 | Claude | `CLAUDE_USAGE_WARN_PERCENT` | `80` | Weekly percentage that adds the warning triangle |
 | both | `AI_USAGE_DATA_DIR` | empty | Daemon data directory, if not the default |
+
+The Claude session line's tooltip describes the session before this one, for example
+"Last session: 12% used - reset 1h15m ago". It reads "just reset" for the first minute. Before
+any reset has been recorded the tooltip falls back to the next reset time.
 
 The Claude menu also carries an "Announce when session limit resets" item, unticked by
 default. Ticking it arms a one-shot spoken announcement: the next time the session

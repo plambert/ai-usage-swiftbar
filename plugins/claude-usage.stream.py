@@ -192,19 +192,19 @@ def announce_line(cfg):
 
 
 def maybe_announce(cfg, state, usage):
-    """Speak a line when the session percentage drops, if the user armed it.
+    """Speak a line when the daemon reports a new session reset, if armed.
 
-    A drop means the session window rolled over. The arm is one-shot: firing
-    clears it. `say` is spawned detached so a long sentence neither blocks the
-    render loop nor dies when SwiftBar restarts the plugin.
+    The arm is one-shot and firing clears it. `say` runs detached, so a long
+    sentence neither blocks the render loop nor dies when SwiftBar restarts
+    the plugin.
     """
-    session = (usage or {}).get("session")
-    percent = session.get("percent") if isinstance(session, dict) else None
-    if percent is None:
+    last = (usage or {}).get("last_session")
+    reset_ts = last.get("reset_ts") if isinstance(last, dict) else None
+    if reset_ts is None:
         return
-    previous = state.get("session_percent")
-    state["session_percent"] = percent
-    if previous is None or percent >= previous or not announce_armed(cfg):
+    previous = state.get("reset_ts")
+    state["reset_ts"] = reset_ts
+    if previous is None or reset_ts <= previous or not announce_armed(cfg):
         return
     try:
         subprocess.Popen([SAY_PATH, ANNOUNCE_TEXT], stdin=subprocess.DEVNULL,
@@ -223,6 +223,25 @@ def capitalize(label):
     return label[:1].upper() + label[1:]
 
 
+def reset_phrase(seconds):
+    """How long ago the session window rolled over."""
+    minutes = int(seconds) // 60
+    if minutes < 1:
+        return "just reset"
+    if minutes < 60:
+        return "reset %dm ago" % minutes
+    return "reset %dh%02dm ago" % (minutes // 60, minutes % 60)
+
+
+def session_tooltip(usage, now):
+    """Describes the session before this one, or None if none is recorded."""
+    last = (usage or {}).get("last_session")
+    if not isinstance(last, dict) or last.get("reset_ts") is None:
+        return None
+    return "Last session: %d%% used - %s" % (last.get("percent") or 0,
+                                             reset_phrase(now - last["reset_ts"]))
+
+
 def limit_text(limit):
     text = "%s: %d%% used" % (capitalize(limit["label"]), limit["percent"])
     if limit.get("reset"):
@@ -230,9 +249,11 @@ def limit_text(limit):
     return text
 
 
-def limit_line(limit, cfg):
+def limit_line(limit, cfg, tooltip=None):
     params = {"href": URL_USAGE}
-    if limit.get("tz"):
+    if tooltip:
+        params["tooltip"] = tooltip
+    elif limit.get("tz"):
         params["tooltip"] = "Resets %s (%s)" % (limit["reset"], limit["tz"])
     if limit["percent"] >= cfg.warn_percent:
         params["color"] = "orange"
@@ -294,7 +315,7 @@ def render(cfg, now, snap):
         out.append("---")
 
     if usage.get("session"):
-        out.append(limit_line(usage["session"], cfg))
+        out.append(limit_line(usage["session"], cfg, session_tooltip(usage, now)))
         out.append("---")
     if usage.get("weekly"):
         out.append(line("Weekly usage"))

@@ -248,14 +248,19 @@ class ClaudeAnnounceTests(unittest.TestCase):
         out = clp.render_once(self.cfg, NOW)
         self.assertTrue(any(r.startswith(clp.ANNOUNCE_LABEL) for r in out))
 
-    def test_drop_while_armed_says_and_disarms(self):
+    def snapshot(self, reset_ts=None, percent=81, last_percent=12):
         data = json.loads(json.dumps(CL_DATA))
-        write_snapshot(self.dir, "claude", data)
+        data["session"]["percent"] = percent
+        if reset_ts is not None:
+            data["last_session"] = {"percent": last_percent, "reset_ts": reset_ts}
+        write_snapshot(self.dir, "claude", data, ts=reset_ts or NOW, fetched_at=reset_ts or NOW)
+
+    def test_new_reset_while_armed_says_and_disarms(self):
         with mock.patch.object(clp.subprocess, "Popen") as popen:
-            self.run_once()                      # records 81%, nothing to compare
+            self.snapshot(reset_ts=NOW)
+            self.run_once()                       # records NOW, nothing to compare
             self.arm()
-            data["session"]["percent"] = 2
-            write_snapshot(self.dir, "claude", data)
+            self.snapshot(reset_ts=NOW + 18000)
             out = self.run_once()
         popen.assert_called_once()
         self.assertEqual(popen.call_args[0][0], [clp.SAY_PATH, clp.ANNOUNCE_TEXT])
@@ -263,38 +268,74 @@ class ClaudeAnnounceTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.cfg.announce_file))
         self.assertNotIn("checked=true", out)
 
-    def test_drop_while_disarmed_stays_quiet(self):
-        data = json.loads(json.dumps(CL_DATA))
-        write_snapshot(self.dir, "claude", data)
+    def test_new_reset_while_disarmed_stays_quiet(self):
         with mock.patch.object(clp.subprocess, "Popen") as popen:
+            self.snapshot(reset_ts=NOW)
             self.run_once()
-            data["session"]["percent"] = 2
-            write_snapshot(self.dir, "claude", data)
+            self.snapshot(reset_ts=NOW + 18000)
             self.run_once()
         popen.assert_not_called()
 
-    def test_rise_while_armed_stays_quiet_and_armed(self):
-        data = json.loads(json.dumps(CL_DATA))
-        data["session"]["percent"] = 10
-        write_snapshot(self.dir, "claude", data)
+    def test_same_reset_while_armed_stays_quiet_and_armed(self):
         with mock.patch.object(clp.subprocess, "Popen") as popen:
+            self.snapshot(reset_ts=NOW)
             self.run_once()
             self.arm()
-            data["session"]["percent"] = 11
-            write_snapshot(self.dir, "claude", data)
+            self.snapshot(reset_ts=NOW, percent=82)
             self.run_once()
         popen.assert_not_called()
         self.assertTrue(os.path.exists(self.cfg.announce_file))
 
     def test_first_reading_never_announces(self):
-        data = json.loads(json.dumps(CL_DATA))
-        data["session"]["percent"] = 2
-        write_snapshot(self.dir, "claude", data)
         self.arm()
         with mock.patch.object(clp.subprocess, "Popen") as popen:
+            self.snapshot(reset_ts=NOW)
             self.run_once()
         popen.assert_not_called()
         self.assertTrue(os.path.exists(self.cfg.announce_file))
+
+
+class ClaudeSessionTooltipTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def session_row(self, last_session, now):
+        data = json.loads(json.dumps(CL_DATA))
+        if last_session is not None:
+            data["last_session"] = last_session
+        write_snapshot(self.dir, "claude", data)
+        out = clp.render_once(cl_config(self.dir), now)
+        return next(r for r in out if r.startswith("Current session:"))
+
+    def test_shows_the_previous_session_and_how_long_ago(self):
+        row = self.session_row({"percent": 12, "reset_ts": NOW - 4500}, NOW)
+        self.assertIn('tooltip="Last session: 12% used - reset 1h15m ago"', row)
+
+    def test_says_just_reset_for_the_first_minute(self):
+        row = self.session_row({"percent": 12, "reset_ts": NOW - 59}, NOW)
+        self.assertIn('tooltip="Last session: 12% used - just reset"', row)
+        row = self.session_row({"percent": 12, "reset_ts": NOW - 60}, NOW)
+        self.assertIn('tooltip="Last session: 12% used - reset 1m ago"', row)
+
+    def test_minutes_only_under_an_hour(self):
+        row = self.session_row({"percent": 5, "reset_ts": NOW - 3540}, NOW)
+        self.assertIn('tooltip="Last session: 5% used - reset 59m ago"', row)
+
+    def test_pads_the_minutes_past_an_hour(self):
+        row = self.session_row({"percent": 5, "reset_ts": NOW - 3960}, NOW)
+        self.assertIn("reset 1h06m ago", row)
+
+    def test_falls_back_to_the_next_reset_when_no_history(self):
+        row = self.session_row(None, NOW)
+        self.assertIn('tooltip="Resets Sep 4 at 5:59pm (America/Los_Angeles)"', row)
+
+    def test_weekly_lines_keep_their_own_tooltip(self):
+        data = json.loads(json.dumps(CL_DATA))
+        data["last_session"] = {"percent": 12, "reset_ts": NOW - 4500}
+        write_snapshot(self.dir, "claude", data)
+        out = clp.render_once(cl_config(self.dir), NOW)
+        row = next(r for r in out if r.startswith("All models:"))
+        self.assertIn('tooltip="Resets Sep 5 at 9:59am (America/Los_Angeles)"', row)
 
 
 if __name__ == "__main__":
