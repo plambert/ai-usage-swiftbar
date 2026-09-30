@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import tempfile
+import time
 import threading
 import unittest
 from unittest import mock
@@ -150,6 +151,46 @@ class OpenRouterSourceTests(unittest.TestCase):
             src.poll(1_700_000_000)
         again = daemon.OpenRouterSource(self.cfg, self.data_dir)
         self.assertEqual(again.history, [[1_700_000_000, 100.0, 90.0]])
+
+    def test_poll_reports_spend_since_midnight(self):
+        src = daemon.OpenRouterSource(self.cfg, self.data_dir)
+        now = time.time()
+        src.history = [[int(daemon.local_midnight(now)) - 60, 100.0, 80.0]]
+        with mock.patch.object(daemon, "resolve_secret", return_value="k"), \
+                mock.patch.object(daemon, "fetch_credits", return_value=(100.0, 90.0)), \
+                mock.patch.object(daemon, "fetch_keys", return_value=[]):
+            data = src.poll(now)
+        self.assertAlmostEqual(data["used_today"], 10.0)
+
+    def test_used_today_is_none_before_the_first_full_day(self):
+        src = daemon.OpenRouterSource(self.cfg, self.data_dir)
+        now = time.time()
+        src.history = [[int(now) - 5, 100.0, 89.0]]
+        with mock.patch.object(daemon, "resolve_secret", return_value="k"), \
+                mock.patch.object(daemon, "fetch_credits", return_value=(100.0, 90.0)), \
+                mock.patch.object(daemon, "fetch_keys", return_value=[]):
+            data = src.poll(now)
+        self.assertIsNone(data["used_today"])
+
+
+class SpendSinceTests(unittest.TestCase):
+    def test_delta_from_the_last_sample_at_or_before_the_cutoff(self):
+        history = [[100, 50.0, 10.0], [200, 50.0, 12.0], [300, 50.0, 18.0]]
+        self.assertAlmostEqual(daemon.spend_since(history, 200), 6.0)
+        self.assertAlmostEqual(daemon.spend_since(history, 250), 6.0)
+        self.assertAlmostEqual(daemon.spend_since(history, 100), 8.0)
+
+    def test_none_when_history_starts_after_the_cutoff(self):
+        self.assertIsNone(daemon.spend_since([], 100))
+        self.assertIsNone(daemon.spend_since([[200, 50.0, 12.0]], 100))
+
+    def test_local_midnight_is_the_start_of_today(self):
+        now = time.time()
+        midnight = daemon.local_midnight(now)
+        t = time.localtime(midnight)
+        self.assertEqual((t.tm_hour, t.tm_min, t.tm_sec), (0, 0, 0))
+        self.assertLessEqual(midnight, now)
+        self.assertLess(now - midnight, 86400 + 3600)
 
 
 class ClaudeSourceTests(unittest.TestCase):

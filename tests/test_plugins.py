@@ -76,6 +76,24 @@ class OpenRouterRenderTests(unittest.TestCase):
         self.assertIn("Restart daemon | bash=/bin/launchctl param1=kickstart param2=-k param3=gui/%d/%s" % (os.getuid(), orp.LAUNCHD_LABEL), joined)
         popen.assert_not_called()
 
+    def test_headline_without_today(self):
+        write_snapshot(self.dir, "openrouter", OR_DATA)
+        out = orp.render_once(or_config(self.dir), {}, NOW)
+        row = next(r for r in out if "remaining" in r and "size=15" in r)
+        self.assertTrue(row.startswith("$10.00 remaining | size=15"))
+        self.assertIn("$100.00 purchased · $90.00 total used", "\n".join(out))
+
+    def test_headline_with_today(self):
+        write_snapshot(self.dir, "openrouter", dict(OR_DATA, used_today=43.21))
+        out = orp.render_once(or_config(self.dir), {}, NOW)
+        row = next(r for r in out if "remaining" in r and "size=15" in r)
+        self.assertTrue(row.startswith("$10.00 remaining, $43.21 used today | size=15"))
+
+    def test_headline_shows_a_zero_spend_day(self):
+        write_snapshot(self.dir, "openrouter", dict(OR_DATA, used_today=0.0))
+        out = orp.render_once(or_config(self.dir), {}, NOW)
+        self.assertIn("$10.00 remaining, $0.00 used today", "\n".join(out))
+
     def test_low_balance_colors_and_notifies_once(self):
         data = dict(OR_DATA, total_usage=97.0)
         write_snapshot(self.dir, "openrouter", data)

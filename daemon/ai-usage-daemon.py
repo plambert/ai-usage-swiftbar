@@ -296,6 +296,19 @@ def burn_rates(history, now):
     return out
 
 
+def local_midnight(now):
+    t = time.localtime(now)
+    return time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1))
+
+
+def spend_since(history, cutoff):
+    """Usage recorded since cutoff, or None when history starts after it."""
+    base = [h for h in history if h[0] <= cutoff]
+    if not history or not base:
+        return None
+    return max(0.0, history[-1][2] - base[-1][2])
+
+
 class OpenRouterSource:
     name = "openrouter"
 
@@ -358,6 +371,7 @@ class OpenRouterSource:
             "keys": self.keys_cache["data"],
             "keys_ts": self.keys_cache["ts"],
             "burn": burn_rates(self.history, now),
+            "used_today": spend_since(self.history, local_midnight(now)),
         }
 
 

@@ -284,9 +284,13 @@ def render(cfg, state, now, snap):
         out.append(line("Showing balance from %s" % relative(now - fetched_at), color="gray"))
         out.append("---")
 
-    out.append(line("%s remaining" % money(remaining), size=15,
+    used_today = data.get("used_today")
+    headline = money(remaining) + " remaining"
+    if used_today is not None:
+        headline += ", %s used today" % money(float(used_today))
+    out.append(line(headline, size=15,
                     **({"color": LEVEL_COLOR[level]} if level in LEVEL_COLOR else {})))
-    out.append(line("%s purchased · %s used" % (money(total), money(usage)), color="gray"))
+    out.append(line("%s purchased · %s total used" % (money(total), money(usage)), color="gray"))
     if level != "ok":
         threshold = cfg.critical if level == "critical" else cfg.low
         out.append(line("Below %s threshold (%s)" % (level, money(threshold)), color=LEVEL_COLOR[level]))

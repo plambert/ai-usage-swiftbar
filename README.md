@@ -25,7 +25,8 @@ launchd ──▶ ai-usage-daemon.py ──▶ ~/Library/Application Support/ai-
   snapshot per source: timestamp, ok flag, error text and suggested fixes, the last good data,
   and when it was fetched. A failed poll keeps the last good data in the snapshot.
 * Every measurement also lands in a history file, `openrouter-history.json` and
-  `claude-history.json`, trimmed to eight days. OpenRouter history feeds the burn rates. Claude
+  `claude-history.json`, trimmed to eight days. OpenRouter history feeds the burn rates and
+  today's spend, which is the usage delta since local midnight. Claude
   history records the session and weekly percentages, and a drop in the session percentage marks
   the point where the window rolled over. The daemon reports that as `last_session` in the
   snapshot, which is what the session tooltip and the announce toggle both read.
