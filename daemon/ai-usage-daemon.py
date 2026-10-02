@@ -17,6 +17,7 @@ Touch <data-dir>/refresh-<source> to make that source poll immediately.
 """
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -29,6 +30,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
 
 DEFAULT_CONFIG = os.path.expanduser("~/.config/ai-usage-swiftbar/config.json")
 DEFAULT_DATA_DIR = os.path.expanduser("~/Library/Application Support/ai-usage-swiftbar")
@@ -405,6 +411,48 @@ def extract_result(raw):
     return strip_ansi(raw)
 
 
+RESET_FORMATS = ("%b %d at %I:%M%p", "%b %d at %I%p")
+
+
+def _zone(name):
+    if not name or ZoneInfo is None:
+        return None
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        return None
+
+
+def parse_reset(text, tz_name, now=None):
+    """Epoch for a reset string like "Sep 26 at 10am", or None.
+
+    Claude omits the year, so pick the one that lands closest to now.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    for fmt in RESET_FORMATS:
+        try:
+            stamp = datetime.datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        break
+    else:
+        return None
+    zone = _zone(tz_name)
+    now = time.time() if now is None else now
+    reference = datetime.datetime.fromtimestamp(now, zone)
+    best = None
+    for year in (reference.year - 1, reference.year, reference.year + 1):
+        try:
+            ts = stamp.replace(year=year, tzinfo=zone).timestamp()
+        except ValueError:
+            continue
+        if best is None or abs(ts - now) < abs(best - now):
+            best = ts
+    return best
+
+
 def parse_usage(text):
     session, weekly, extra, in_extra = None, [], [], False
     for raw in text.splitlines():
@@ -420,6 +468,7 @@ def parse_usage(text):
                 "percent": int(m.group("pct")),
                 "reset": reset,
                 "tz": tz,
+                "reset_ts": parse_reset(reset, tz),
             }
             if m.group("scope") == "session":
                 session = limit
@@ -448,6 +497,22 @@ def last_session_reset(history):
         if isinstance(before, int) and isinstance(after, int) and after < before:
             return {"percent": before, "reset_ts": history[i][0]}
     return None
+
+
+def last_weekly_resets(history):
+    """{label: {percent, reset_ts}} for the newest drop in each weekly figure."""
+    out, previous = {}, {}
+    for row in history:
+        ts, weekly = row[0], row[2] or []
+        for item in weekly:
+            if not (isinstance(item, list) and len(item) == 2):
+                continue
+            label, percent = item
+            before = previous.get(label)
+            if isinstance(before, int) and isinstance(percent, int) and percent < before:
+                out[label] = {"percent": before, "reset_ts": ts}
+            previous[label] = percent
+    return out
 
 
 class ClaudeSource:
@@ -505,6 +570,7 @@ class ClaudeSource:
         usage = parse_usage(self.run_claude())
         self.record(now, usage)
         usage["last_session"] = last_session_reset(self.history)
+        usage["weekly_resets"] = last_weekly_resets(self.history)
         return usage
 
 

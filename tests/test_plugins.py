@@ -347,13 +347,65 @@ class ClaudeSessionTooltipTests(unittest.TestCase):
         row = self.session_row(None, NOW)
         self.assertIn('tooltip="Resets Sep 4 at 5:59pm (America/Los_Angeles)"', row)
 
-    def test_weekly_lines_keep_their_own_tooltip(self):
+    def test_weekly_lines_fall_back_when_there_is_nothing_to_pace(self):
         data = json.loads(json.dumps(CL_DATA))
         data["last_session"] = {"percent": 12, "reset_ts": NOW - 4500}
         write_snapshot(self.dir, "claude", data)
         out = clp.render_once(cl_config(self.dir), NOW)
         row = next(r for r in out if r.startswith("All models:"))
         self.assertIn('tooltip="Resets Sep 5 at 9:59am (America/Los_Angeles)"', row)
+
+
+HALF_WEEK = 3.5 * 86400
+
+
+class ClaudeWeeklyPaceTests(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def weekly_row(self, percent, start=None, reset_ts=None, resets=None, now=NOW):
+        data = json.loads(json.dumps(CL_DATA))
+        data["weekly"] = [{"label": "all models", "percent": percent,
+                           "reset": "Sep 5 at 9:59am", "tz": "America/Los_Angeles",
+                           "reset_ts": reset_ts if reset_ts is not None else (
+                               (start + clp.WEEK_SECONDS) if start is not None else None)}]
+        if resets is not None:
+            data["weekly_resets"] = resets
+        write_snapshot(self.dir, "claude", data)
+        out = clp.render_once(cl_config(self.dir), now)
+        return next(r for r in out if r.startswith("All models:"))
+
+    def test_on_track_at_half_the_week(self):
+        row = self.weekly_row(50, start=NOW - HALF_WEEK)
+        self.assertIn('tooltip="3.5 of 7 days in, 50% expected - on track"', row)
+
+    def test_five_points_either_way_is_still_on_track(self):
+        self.assertIn("on track", self.weekly_row(55, start=NOW - HALF_WEEK))
+        self.assertIn("on track", self.weekly_row(45, start=NOW - HALF_WEEK))
+
+    def test_behind_the_line(self):
+        row = self.weekly_row(30, start=NOW - HALF_WEEK)
+        self.assertIn('tooltip="3.5 of 7 days in, 50% expected - 20% behind"', row)
+        self.assertNotIn("runs out", row)
+
+    def test_ahead_of_the_line_projects_a_runout(self):
+        row = self.weekly_row(70, start=NOW - HALF_WEEK)
+        self.assertIn("3.5 of 7 days in, 50% expected - 20% ahead, runs out ", row)
+        self.assertIn("runs out %s" % clp.when(NOW + 129600), row)
+
+    def test_recorded_reset_wins_over_the_assumed_one(self):
+        # Upcoming reset puts the start a week back; the record says two days.
+        row = self.weekly_row(50, reset_ts=NOW + HALF_WEEK,
+                              resets={"all models": {"percent": 88, "reset_ts": NOW - 2 * 86400}})
+        self.assertIn("2.0 of 7 days in, 29% expected - 21% ahead", row)
+
+    def test_assumed_start_is_a_week_before_the_upcoming_reset(self):
+        row = self.weekly_row(50, reset_ts=NOW + HALF_WEEK)
+        self.assertIn("3.5 of 7 days in, 50% expected - on track", row)
+
+    def test_elapsed_never_runs_past_the_week(self):
+        row = self.weekly_row(99, start=NOW - 9 * 86400)
+        self.assertIn("7.0 of 7 days in, 100% expected - on track", row)
 
 
 if __name__ == "__main__":

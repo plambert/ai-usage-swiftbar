@@ -1,3 +1,4 @@
+import datetime
 import importlib.util
 import json
 import os
@@ -6,6 +7,7 @@ import time
 import threading
 import unittest
 from unittest import mock
+from zoneinfo import ZoneInfo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, "fixtures")
@@ -225,6 +227,65 @@ class ClaudeSourceTests(unittest.TestCase):
         self.assertTrue(os.path.isdir(src.work_dir))
 
 
+LA = "America/Los_Angeles"
+
+
+class ParseResetTests(unittest.TestCase):
+    def at(self, *args):
+        return datetime.datetime(*args, tzinfo=ZoneInfo(LA)).timestamp()
+
+    def fields(self, ts):
+        got = datetime.datetime.fromtimestamp(ts, ZoneInfo(LA))
+        return (got.year, got.month, got.day, got.hour, got.minute)
+
+    def test_hour_only(self):
+        ts = daemon.parse_reset("Sep 26 at 10am", LA, self.at(2026, 9, 20, 12, 0))
+        self.assertEqual(self.fields(ts), (2026, 9, 26, 10, 0))
+
+    def test_hour_and_minute(self):
+        ts = daemon.parse_reset("Sep 30 at 6:10pm", LA, self.at(2026, 9, 30, 13, 0))
+        self.assertEqual(self.fields(ts), (2026, 9, 30, 18, 10))
+
+    def test_single_digit_day(self):
+        ts = daemon.parse_reset("Oct 1 at 12pm", LA, self.at(2026, 9, 30, 13, 0))
+        self.assertEqual(self.fields(ts), (2026, 10, 1, 12, 0))
+
+    def test_year_closest_to_now_across_the_boundary(self):
+        ts = daemon.parse_reset("Jan 2 at 10am", LA, self.at(2026, 12, 30, 9, 0))
+        self.assertEqual(self.fields(ts)[0], 2027)
+
+    def test_unparseable(self):
+        self.assertIsNone(daemon.parse_reset("", LA))
+        self.assertIsNone(daemon.parse_reset("sometime soon", LA))
+
+    def test_missing_zone_falls_back_to_local(self):
+        self.assertIsNotNone(daemon.parse_reset("Sep 26 at 10am", ""))
+        self.assertIsNotNone(daemon.parse_reset("Sep 26 at 10am", "Not/AZone"))
+
+    def test_parse_usage_attaches_the_timestamp(self):
+        usage = daemon.parse_usage("Current session: 5% used · resets Sep 26 at 10am (America/Los_Angeles)")
+        self.assertIsNotNone(usage["session"]["reset_ts"])
+
+
+class WeeklyResetTests(unittest.TestCase):
+    def test_newest_drop_per_label(self):
+        history = [
+            [10, 5, [["all models", 80], ["Fable", 10]]],
+            [20, 6, [["all models", 90], ["Fable", 20]]],
+            [30, 7, [["all models", 3], ["Fable", 25]]],
+            [40, 8, [["all models", 9], ["Fable", 4]]],
+        ]
+        self.assertEqual(daemon.last_weekly_resets(history), {
+            "all models": {"percent": 90, "reset_ts": 30},
+            "Fable": {"percent": 25, "reset_ts": 40},
+        })
+
+    def test_empty_without_a_drop(self):
+        self.assertEqual(daemon.last_weekly_resets([]), {})
+        self.assertEqual(daemon.last_weekly_resets([[10, 5, [["all models", 3]]],
+                                                    [20, 6, [["all models", 9]]]]), {})
+
+
 class ClaudeHistoryTests(unittest.TestCase):
     def setUp(self):
         self.data_dir = tempfile.mkdtemp()
@@ -259,6 +320,14 @@ class ClaudeHistoryTests(unittest.TestCase):
     def test_last_session_reset_is_none_without_a_drop(self):
         self.assertIsNone(daemon.last_session_reset([]))
         self.assertIsNone(daemon.last_session_reset([[10, 5, []], [20, 9, []]]))
+
+    def test_poll_reports_the_weekly_resets(self):
+        src = self.source()
+        src.history = [[1_699_999_000, 5, [["all models", 70]]],
+                       [1_699_999_060, 6, [["all models", 2]]]]
+        data = src.poll(1_700_000_000)
+        self.assertEqual(data["weekly_resets"],
+                         {"all models": {"percent": 70, "reset_ts": 1_699_999_060}})
 
     def test_poll_reports_the_last_reset(self):
         src = self.source()

@@ -95,6 +95,13 @@ The Claude session line's tooltip describes the session before this one, for exa
 "Last session: 12% used - reset 1h15m ago". It reads "just reset" for the first minute. Before
 any reset has been recorded the tooltip falls back to the next reset time.
 
+Each weekly line's tooltip compares usage against a straight line across the week, for example
+"3.5 of 7 days in, 50% expected - on track". Within 5 percentage points of the line counts as
+on track. Below it the tooltip says how far behind. Above it the tooltip says how far ahead and
+projects the runout at the current rate, for example "45% ahead, runs out Oct 2 at 4:25am". The
+week starts at the last reset the daemon recorded for that label, or a week before the upcoming
+reset when it has no record.
+
 The Claude menu also carries an "Announce when session limit resets" item, unticked by
 default. Ticking it arms a one-shot spoken announcement: the next time the session
 percentage drops, which means the window has rolled over, the plugin runs `say` in the

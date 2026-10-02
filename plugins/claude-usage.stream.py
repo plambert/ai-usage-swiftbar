@@ -34,6 +34,9 @@ SOURCE = "claude"
 
 URL_USAGE = "https://claude.ai/new#settings/usage"
 
+WEEK_SECONDS = 7 * 86400
+ON_TRACK_POINTS = 5
+
 SAY_PATH = "/usr/bin/say"
 ANNOUNCE_LABEL = "Announce when session limit resets"
 ANNOUNCE_TEXT = "The claude session limit has reset."
@@ -233,6 +236,56 @@ def reset_phrase(seconds):
     return "reset %dh%02dm ago" % (minutes // 60, minutes % 60)
 
 
+def when(ts):
+    """Formats a timestamp the way Claude writes its own reset times."""
+    t = time.localtime(ts)
+    hour = t.tm_hour % 12 or 12
+    clock_part = "%d:%02d" % (hour, t.tm_min) if t.tm_min else "%d" % hour
+    return "%s %d at %s%s" % (time.strftime("%b", t), t.tm_mday,
+                              clock_part, "am" if t.tm_hour < 12 else "pm")
+
+
+def week_start(limit, usage):
+    """When this week began.
+
+    The daemon reports the last observed reset per label. Without one, work
+    back a full week from the upcoming reset.
+    """
+    recorded = ((usage or {}).get("weekly_resets") or {}).get(limit.get("label"))
+    if isinstance(recorded, dict) and recorded.get("reset_ts") is not None:
+        return recorded["reset_ts"]
+    if limit.get("reset_ts") is not None:
+        return limit["reset_ts"] - WEEK_SECONDS
+    return None
+
+
+def runout(percent, elapsed, now):
+    """When linear usage would reach 100%, or None if it cannot be projected."""
+    if percent <= 0 or elapsed <= 0:
+        return None
+    return now + (100.0 - percent) * elapsed / percent
+
+
+def weekly_tooltip(limit, usage, now):
+    """Compares usage against a straight line across the week."""
+    start = week_start(limit, usage)
+    if start is None:
+        return None
+    elapsed = min(max(now - start, 0.0), WEEK_SECONDS)
+    expected = 100.0 * elapsed / WEEK_SECONDS
+    delta = limit["percent"] - expected
+    head = "%.1f of 7 days in, %d%% expected" % (elapsed / 86400.0, round(expected))
+    if abs(delta) <= ON_TRACK_POINTS:
+        return "%s - on track" % head
+    if delta < 0:
+        return "%s - %d%% behind" % (head, round(-delta))
+    out = "%s - %d%% ahead" % (head, round(delta))
+    projected = runout(limit["percent"], elapsed, now)
+    if projected is not None:
+        out += ", runs out %s" % when(projected)
+    return out
+
+
 def session_tooltip(usage, now):
     """Describes the session before this one, or None if none is recorded."""
     last = (usage or {}).get("last_session")
@@ -320,7 +373,7 @@ def render(cfg, now, snap):
     if usage.get("weekly"):
         out.append(line("Weekly usage"))
         for limit in usage["weekly"]:
-            out.append(limit_line(limit, cfg))
+            out.append(limit_line(limit, cfg, weekly_tooltip(limit, usage, now)))
         out.append("---")
     if usage.get("extra"):
         out.append(line("What's contributing"))
